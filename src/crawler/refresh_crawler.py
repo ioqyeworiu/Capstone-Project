@@ -5,19 +5,18 @@ from sqlalchemy import create_engine, text
 from functools import partial
 from threading import Thread
 from multiprocessing import Pool, Process
-from selenium.webdriver.support.ui import WebDriverWait
 import threading
 import psutil
 import os
 from dotenv import load_dotenv
-from time import sleep
+from time import sleep, monotonic
 from uuid import uuid4
 
 load_dotenv(override=True)
 
 CACHE_CLEAR_INTERVAL = 25         # cứ mỗi 25 URL thì dọn cache (nếu chưa tới lúc restart)
 RESTART_INTERVAL = 100             # cứ mỗi 50 URL thì restart driver, bất kể RAM
-MAX_DRIVER_MEMORY_MB = 2500       # hoặc RAM vượt ngưỡng này thì restart sớm hơn
+MAX_DRIVER_MEMORY_MB = 2000       # hoặc RAM vượt ngưỡng này thì restart sớm hơn
 DEFAULT_BATCH_SIZE = 500
 CRAWL_SLEEP_AFTER_LOAD = 0.03     # đợi sau khi driver.get() trước khi lấy page_source
 EMPTY_BATCH_SLEEP = 3             # nghỉ khi không còn URL nào cần crawl
@@ -30,7 +29,7 @@ DEFAULT_WINDOW_HEIGHT = 1080   # kích thước mặc định, quay lại sau kh
 
 def create_kafka_producer() -> Producer:
     return Producer({
-        "bootstrap.servers": "192.168.196.128:9092",
+        "bootstrap.servers": "35.209.29.2:9092",
         "client.id": f"refresh-crawler-{os.getpid()}-{uuid4().hex[:8]}",
         "acks": "all",
         "enable.idempotence": True,
@@ -196,11 +195,13 @@ class RefreshCrawler(BaseCrawler):
 
     def _crawl_one(self, url_id, url) -> str | None:
         try:
+            t0 = monotonic()
             self.driver.get(url)
+            t1 = monotonic()
             while True:
                 # Cuộn xuống từng đoạn ngắn 700 pixel
+                sleep(0.05) # Dừng lại để chờ Tiki gọi API và render HTML
                 self.driver.execute_script("window.scrollBy(0, 700);")
-                sleep(0.08) # Dừng lại để chờ Tiki gọi API và render HTML
                 
                 # Kiểm tra tọa độ hiện tại so với chiều cao tối đa của trang
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
@@ -210,6 +211,9 @@ class RefreshCrawler(BaseCrawler):
                 if current_position >= new_height:
                     break
             html = self.driver.page_source
+            t2 = monotonic()
+    
+            logger.info(f"Finished crawling URL {url_id} in {t2 - t0:.2f} seconds (load: {t1 - t0:.2f}s, scroll: {t2 - t1:.2f}s)")
             return html
         
         except Exception as e:
@@ -284,7 +288,8 @@ def run_refresh_crawler(batch_size, profile_name):
         driver_path=r"C:\Users\pmqua\Downloads\edgedriver_win64\msedgedriver.exe",
         user_data_dir=r"C:\Users\pmqua\Downloads\selenium_user_data",
         cleanup_user_data_dir=True,
-        profile_name=profile_name
+        profile_name=profile_name,
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/91.0.864.37"
     )
     crawler.start()
     try:
@@ -295,12 +300,21 @@ def run_refresh_crawler(batch_size, profile_name):
 if __name__ == "__main__":
     p1 = Process(target=run_refresh_crawler, args=(DEFAULT_BATCH_SIZE, "refresh1"))
     p2 = Process(target=run_refresh_crawler, args=(DEFAULT_BATCH_SIZE, "refresh2"))
+    p3 = Process(target=run_refresh_crawler, args=(DEFAULT_BATCH_SIZE, "refresh3"))
+    # p4 = Process(target=run_refresh_crawler, args=(DEFAULT_BATCH_SIZE, "refresh4"))
+
     p1.start()
     p2.start()
+    p3.start()
+    # p4.start()
     try:
         p1.join()
         p2.join()
+        p3.join()
+        # p4.join()
     except KeyboardInterrupt:
         logger.info("Main process interrupted, waiting for children to shut down...")
         p1.join()
         p2.join()
+        p3.join()
+        # p4.join()

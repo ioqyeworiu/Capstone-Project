@@ -37,7 +37,7 @@ def get_driver_ram_mb(driver):
                 continue
         return total / (1024 * 1024)
     except Exception:
-        logger.exception("Không lấy được RAM của driver")
+        logger.exception("fail to get driver RAM")
         return None
 
 def producer_crawl(crawler: BaseCrawler, url_seed: str, url_queue: queue.Queue, db_queue: queue.Queue):
@@ -79,7 +79,6 @@ def producer_crawl(crawler: BaseCrawler, url_seed: str, url_queue: queue.Queue, 
 
             if new_url in visited:
                 continue
-            visited.add(new_url)
 
             try:
                 url_queue.put_nowait(new_url)
@@ -87,6 +86,7 @@ def producer_crawl(crawler: BaseCrawler, url_seed: str, url_queue: queue.Queue, 
                 logger.warning("url_queue full")
             try:
                 db_queue.put_nowait(new_url)
+                visited.add(new_url)
             except queue.Full:
                 logger.warning("db_queue full")
 
@@ -115,7 +115,7 @@ def producer_crawl(crawler: BaseCrawler, url_seed: str, url_queue: queue.Queue, 
             crawler.restart_driver()
             pages_since_restart = 0
 
-        print(f"url_queue size: {url_queue.qsize()} | visited: {len(visited)} | RAM: {ram_mb:.0f}MB" if ram_mb else f"url_queue size: {url_queue.qsize()} | visited: {len(visited)}")
+        logger.info(f"url_queue size: {url_queue.qsize()} | visited: {len(visited)} | RAM: {ram_mb:.0f}MB" if ram_mb else f"url_queue size: {url_queue.qsize()} | visited: {len(visited)}")
 
 def consumer_write_db(engine, db_queue: queue.Queue, worker_id: int):
     while True:
